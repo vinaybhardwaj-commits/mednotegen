@@ -1,0 +1,48 @@
+import type { Answer, FaithfulnessReport, GroundingEntry } from "./types";
+
+/**
+ * Two-layer faithfulness check (PRD §7 / plan §4.3).
+ * Layer 1 (here, deterministic): every number and capitalized token in the note
+ *   must appear in the answers. Orphans are flagged.
+ * Layer 2 (TODO P1-C5): Gemini-flash judges each sentence Supported/Unsupported
+ *   against the answers, complementing the grounding_map the composer emitted.
+ */
+
+function numbers(text: string): string[] {
+  return (text.match(/\d+(?:\.\d+)?/g) ?? []).map((s) => s);
+}
+
+// Crude proper-noun / entity proxy: TitleCase words 4+ chars, minus section headers.
+function entities(text: string): string[] {
+  const stop = new Set(["Patient", "Procedure", "Diagnosis", "Operative", "Note", "Post"]);
+  return Array.from(
+    new Set((text.match(/\b[A-Z][a-zA-Z]{3,}\b/g) ?? []).filter((w) => !stop.has(w))),
+  );
+}
+
+export function checkGroundingRules(markdown: string, answers: Answer[]): FaithfulnessReport {
+  const haystack = answers.map((a) => String(a.value ?? "")).join(" \n ");
+  const orphans: string[] = [];
+
+  for (const n of numbers(markdown)) {
+    if (!haystack.includes(n)) orphans.push(n);
+  }
+  for (const e of entities(markdown)) {
+    if (!new RegExp(`\\b${e}\\b`, "i").test(haystack)) orphans.push(e);
+  }
+
+  return { ok: orphans.length === 0, unsupported: [], orphan_entities: Array.from(new Set(orphans)) };
+}
+
+/** Combine the composer's grounding_map with the rule layer. */
+export function mergeFaithfulness(
+  grounding: GroundingEntry[],
+  ruleReport: FaithfulnessReport,
+): FaithfulnessReport {
+  const unsupported = grounding.filter((g) => !g.supported);
+  return {
+    ok: unsupported.length === 0 && ruleReport.orphan_entities.length === 0,
+    unsupported,
+    orphan_entities: ruleReport.orphan_entities,
+  };
+}
