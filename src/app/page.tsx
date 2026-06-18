@@ -33,10 +33,15 @@ export default function Home() {
   const [signer, setSigner] = useState("");
   const [signing, setSigning] = useState(false);
   const [signed, setSigned] = useState(false);
+  const [lockedCov, setLockedCov] = useState<{ covered: number; total: number } | null>(null);
 
   const words = useMemo(() => (text.trim() ? text.trim().split(/\s+/).length : 0), [text]);
   const current = NOTE_TYPES.find((n) => n.key === noteType)!;
-  const coverage = useMemo<Coverage>(() => computeCoverage(floor, text), [floor, text]);
+  const liveCoverage = useMemo<Coverage>(() => computeCoverage(floor, text), [floor, text]);
+  // Once signed, freeze the NABH pill at the pre-sign count (the appended gaps footer would
+  // otherwise make the keyword matcher re-match every gap label and flip the pill to full).
+  const coverage = liveCoverage;
+  const covDisplay = signed && lockedCov ? lockedCov : { covered: coverage.covered, total: coverage.total };
   const gaps = coverage.total - coverage.covered;
   const needed = coverage.items.filter((i) => !i.covered);
   const have = coverage.items.filter((i) => i.covered);
@@ -52,6 +57,7 @@ export default function Home() {
   const analyzeTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const analyzeCtrl = useRef<AbortController | null>(null);
   const lastAnalyzed = useRef<string>("");
+  const lockRef = useRef<boolean>(false); // true from the moment Sign begins — kills late ghost/analyze
 
   const api = useCallback(
     (path: string, init?: RequestInit) =>
@@ -87,6 +93,7 @@ export default function Home() {
   }, [api, ensureSession]);
 
   const runAnalyze = useCallback(async () => {
+    if (lockRef.current) return;
     const t = textRef.current.trim();
     if (t.length < 8) { setChips([]); return; }
     if (t === lastAnalyzed.current) return;
@@ -108,7 +115,7 @@ export default function Home() {
 
   const onEditorChange = useCallback((t: string, h: string) => {
     setText(t); textRef.current = t; htmlRef.current = h;
-    if (signed) return;
+    if (signed || lockRef.current) return;
     if (saveTimer.current) clearTimeout(saveTimer.current);
     setSave("saving"); saveTimer.current = setTimeout(flushSave, 800);
     setChips([]); setRewrites([]);
@@ -167,10 +174,19 @@ export default function Home() {
   function doSign() {
     const ed = editorRef.current; if (!ed || !signer.trim()) return;
     setSigning(true);
+    // Lock the assistant the moment we commit to signing, so a late analyze response can't
+    // re-paint ghost text or rewrites onto the finished note.
+    lockRef.current = true;
+    setLockedCov({ covered: coverage.covered, total: coverage.total });
+    if (analyzeTimer.current) clearTimeout(analyzeTimer.current);
+    analyzeCtrl.current?.abort();
+    ed.commands.clearSuggestion(); ed.commands.clearRewrites();
+    setChips([]); setRewrites([]);
     const labels = needed.map((n) => n.label).join(", ");
     const footer = labels ? `\n\n---\nNABH — items not documented: ${labels}.` : "";
     const finalMd = ed.getText({ blockSeparator: "\n\n" }) + footer;
     if (footer) ed.chain().focus("end").insertContent(`<p></p><p><em>NABH — items not documented: ${labels}.</em></p>`).run();
+    ed.commands.clearSuggestion(); ed.commands.clearRewrites();
     (async () => {
       try {
         const id = await ensureSession();
@@ -181,7 +197,7 @@ export default function Home() {
   }
 
   const saveLabel = save === "saving" ? "saving…" : save === "saved" ? "saved" : save === "error" ? "save failed — retry" : "";
-  const pillFull = coverage.total > 0 && gaps === 0;
+  const pillFull = covDisplay.total > 0 && covDisplay.covered >= covDisplay.total;
   const canAct = words >= 2 && !signed;
 
   return (
@@ -190,7 +206,7 @@ export default function Home() {
         <button className="mng-iconbtn" aria-label="Back" style={{ width: 36, height: 36, border: 0 }}><i className="ti ti-chevron-left" aria-hidden="true" /></button>
         <span className="mng-title">{signed ? "Signed note" : "New note"}</span>
         <span className={"mng-pill" + (pillFull ? " ok" : "")}>
-          <i className="ti ti-shield-check" aria-hidden="true" /> NABH {floor.length ? `${coverage.covered}/${coverage.total}` : "—"}
+          <i className="ti ti-shield-check" aria-hidden="true" /> NABH {floor.length ? `${covDisplay.covered}/${covDisplay.total}` : "—"}
         </span>
       </header>
 
