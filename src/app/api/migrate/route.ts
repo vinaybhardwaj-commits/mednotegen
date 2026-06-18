@@ -4,6 +4,10 @@ import path from "node:path";
 import { neon } from "@neondatabase/serverless";
 
 export const runtime = "nodejs";
+export const maxDuration = 60;
+
+// neon() has no .query() in this version; run raw strings via the tagged-template form.
+type RawSql = (strings: TemplateStringsArray, ...params: unknown[]) => Promise<unknown>;
 
 /**
  * Protected migration: runs db/schema.sql then db/seed/nabh_requirements_seed.sql.
@@ -16,19 +20,23 @@ export async function POST(req: NextRequest) {
   const url = process.env.DATABASE_URL;
   if (!url) return NextResponse.json({ error: "DATABASE_URL unset" }, { status: 500 });
 
-  // neon() http driver exposes .query() at runtime; type defs (0.10.x) don't surface it.
-  const runner = neon(url) as unknown as { query: (q: string) => Promise<unknown> };
+  const sql = neon(url) as unknown as RawSql;
   const root = process.cwd();
   const files = ["db/schema.sql", "db/seed/nabh_requirements_seed.sql"];
   const ran: Record<string, number> = {};
 
-  for (const f of files) {
-    const text = await readFile(path.join(root, f), "utf8");
-    const statements = splitSql(text);
-    for (const stmt of statements) {
-      await runner.query(stmt);
+  try {
+    for (const f of files) {
+      const text = await readFile(path.join(root, f), "utf8");
+      const statements = splitSql(text);
+      for (const stmt of statements) {
+        const tsa = Object.assign([stmt], { raw: [stmt] }) as unknown as TemplateStringsArray;
+        await sql(tsa);
+      }
+      ran[f] = statements.length;
     }
-    ran[f] = statements.length;
+  } catch (e) {
+    return NextResponse.json({ error: String(e), ran }, { status: 500 });
   }
 
   return NextResponse.json({ ok: true, ran });
