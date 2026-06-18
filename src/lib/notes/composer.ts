@@ -54,12 +54,14 @@ Compose the note now per the rules. Return ONLY the JSON object.`;
     try { parsed = JSON.parse(stripFences(raw)); }
     catch { if (attempt === 1) throw new Error("composer returned non-JSON twice"); }
   }
-  const grounding: GroundingEntry[] = (parsed.grounding_map ?? []).map((g: any) => ({
-    sentence_id: g.sentence_id,
-    sentence_text: g.sentence_text,
-    source_field_keys: g.source_field_keys ?? [],
-    supported: (g.source_field_keys ?? []).length > 0,
-  }));
+  const grounding: GroundingEntry[] = (parsed.grounding_map ?? []).map((g: any) => {
+    const text = String(g.sentence_text ?? "");
+    const keys = g.source_field_keys ?? [];
+    // Structural lines (headings, table rows/separators, bullets, blanks) carry no clinical
+    // claim, so they need no source field — only substantive sentences must be grounded.
+    const structural = /^\s*(#{1,6}\s|\||-{3,}|[*-]\s|$)/.test(text) || text.trim().length < 4;
+    return { sentence_id: g.sentence_id, sentence_text: text, source_field_keys: keys, supported: keys.length > 0 || structural };
+  });
 
   return { markdown: parsed.markdown ?? "", grounding };
 }
