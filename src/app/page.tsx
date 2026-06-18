@@ -47,10 +47,14 @@ export default function Home() {
     [token],
   );
 
-  const [step, setStep] = useState<"home" | "start" | "answer" | "review" | "done">("home");
+  const [step, setStep] = useState<"home" | "start" | "freetext" | "answer" | "review" | "done">("home");
+  const [mode, setMode] = useState<"qa" | "freetext">("qa");
   const [noteType, setNoteType] = useState<(typeof NOTE_TYPES)[number] | null>(null);
   const [procedure, setProcedure] = useState("");
   const [uhid, setUhid] = useState("");
+  const [rawText, setRawText] = useState("");
+  const [expansions, setExpansions] = useState<{ from: string; to: string }[]>([]);
+  const [nudges, setNudges] = useState<{ field_key: string; label: string; why: string }[]>([]);
   const [sessionId, setSessionId] = useState("");
   const [fields, setFields] = useState<Field[]>([]);
   const [answers, setAnswers] = useState<Record<string, string>>({});
@@ -85,6 +89,34 @@ export default function Home() {
     const init: Record<string, string> = {};
     for (const f of fs) if (f.default_value != null) init[f.field_key] = f.default_value;
     setAnswers(init);
+    setMsg(""); setStep("answer");
+  }
+
+  // ---- Mode B: free-text → parse/expand/map → gaps ----
+  async function startFreetext() {
+    if (!noteType) { setMsg("Pick a note type."); return; }
+    if (!rawText.trim()) { setMsg("Type or paste your note first."); return; }
+    setBusy(true); setMsg("Expanding shorthand & structuring your text…");
+    const s = await api("/api/sessions", {
+      method: "POST",
+      body: JSON.stringify({ note_type: noteType.key, procedure, patient_ref: uhid, mode: "freetext", raw_input: rawText }),
+    });
+    if (!s.ok) { setBusy(false); setMsg("Could not start: " + (s.json?.error || s.status)); return; }
+    const id = s.json.id as string;
+    setSessionId(id);
+    const p = await api(`/api/sessions/${id}/freetext`, { method: "POST", body: JSON.stringify({ raw_text: rawText }) });
+    if (!p.ok) { setBusy(false); setMsg("Parse failed: " + (p.json?.error || p.status)); return; }
+    const q = await api(`/api/sessions/${id}/questions`, { method: "POST" });
+    setBusy(false);
+    if (!q.ok) { setMsg("Could not load fields: " + (q.json?.error || q.status)); return; }
+    const fs = (q.json.fields || []) as Field[];
+    setFields(fs);
+    const init: Record<string, string> = {};
+    for (const f of fs) if (f.default_value != null) init[f.field_key] = f.default_value;
+    Object.assign(init, p.json.mapped || {}); // parsed values win over defaults
+    setAnswers(init);
+    setExpansions(p.json.expansions || []);
+    setNudges(p.json.nudges || []);
     setMsg(""); setStep("answer");
   }
 
@@ -149,7 +181,8 @@ export default function Home() {
   }
 
   function reset() {
-    setStep("home"); setNoteType(null); setProcedure(""); setUhid(""); setSessionId("");
+    setStep("home"); setMode("qa"); setNoteType(null); setProcedure(""); setUhid(""); setSessionId("");
+    setRawText(""); setExpansions([]); setNudges([]);
     setFields([]); setAnswers({}); setNoteId(""); setDraft(""); setNabh(null); setFaith(null); setGrounding([]); setSigner(""); setMsg("");
   }
 
@@ -169,16 +202,17 @@ export default function Home() {
           <h2 className="text-xs font-medium uppercase tracking-wide text-slate-500">Start a note (Q&amp;A mode)</h2>
           <div className="mt-3 grid gap-3">
             {NOTE_TYPES.map((n) => (
-              <button key={n.key} onClick={() => { setNoteType(n); setStep("start"); }}
+              <button key={n.key} onClick={() => { setMode("qa"); setNoteType(n); setStep("start"); }}
                 className="rounded-xl border border-slate-200 bg-white p-4 text-left shadow-sm hover:border-clinical">
                 <div className="font-medium">{n.title}</div>
                 <div className="text-sm text-slate-500">{n.blurb}</div>
               </button>
             ))}
-            <div className="rounded-xl border border-dashed border-slate-200 p-4 text-left opacity-60">
-              <div className="font-medium">Free-text mode <span className="text-xs font-normal">(coming soon)</span></div>
-              <div className="text-sm text-slate-500">Type/dictate freely → we expand, structure &amp; nudge for gaps.</div>
-            </div>
+            <button onClick={() => { setMode("freetext"); setNoteType(NOTE_TYPES[0]); setStep("freetext"); }}
+              className="rounded-xl border border-dashed border-clinical/40 bg-cyan-50/40 p-4 text-left hover:border-clinical">
+              <div className="font-medium">Free-text mode</div>
+              <div className="text-sm text-slate-500">Type or dictate freely → we expand shorthand, structure it &amp; nudge for gaps.</div>
+            </button>
           </div>
         </section>
       )}
@@ -199,6 +233,38 @@ export default function Home() {
         </section>
       )}
 
+      {/* FREE-TEXT (Mode B) */}
+      {step === "freetext" && noteType && (
+        <section className="mt-6 space-y-4">
+          <h2 className="text-sm font-medium">Free-text note</h2>
+          <div>
+            <span className="mb-1 block text-sm font-medium text-slate-700">Note type</span>
+            <div className="flex flex-wrap gap-2">
+              {NOTE_TYPES.map((n) => (
+                <button key={n.key} onClick={() => setNoteType(n)}
+                  className={`rounded-full border px-3 py-1 text-sm ${noteType.key === n.key ? "border-clinical bg-cyan-50 text-clinical" : "border-slate-200"}`}>
+                  {n.title}
+                </button>
+              ))}
+            </div>
+          </div>
+          {noteType.needsProcedure && (
+            <Labeled label="Procedure (optional)">
+              <input className="inp" value={procedure} onChange={(e) => setProcedure(e.target.value)} placeholder="e.g. Laparoscopic inguinal hernia repair" />
+            </Labeled>
+          )}
+          <Labeled label="Patient UHID">
+            <input className="inp" value={uhid} onChange={(e) => setUhid(e.target.value)} placeholder="EHRC-…" />
+          </Labeled>
+          <Labeled label="Your note / shorthand">
+            <textarea className="inp h-48" value={rawText} onChange={(e) => setRawText(e.target.value)}
+              placeholder="Type or paste freely. Shorthand is fine — e.g. 'Lap TEP R inguinal hernia, GA, EBL 10ml, polyprop mesh 15x10 tacked to Cooper, counts correct, no complications, plan early ambulation, review 1wk'." />
+          </Labeled>
+          <p className="text-xs text-slate-500">We expand shorthand using only your text (logged for a future lexicon), map it to the note&apos;s fields, and flag any NABH gaps. You confirm everything before signing.</p>
+          <button disabled={busy} onClick={startFreetext} className="btn-primary">Expand &amp; structure →</button>
+        </section>
+      )}
+
       {/* ANSWER */}
       {step === "answer" && (
         <section className="mt-6">
@@ -211,6 +277,22 @@ export default function Home() {
               <div className="h-1.5 rounded bg-clinical" style={{ width: `${mandatory.length ? (answered / mandatory.length) * 100 : 0}%` }} />
             </div>
           </div>
+
+          {mode === "freetext" && expansions.length > 0 && (
+            <div className="mb-4 rounded-lg border border-slate-200 bg-white p-3">
+              <div className="text-xs font-semibold uppercase tracking-wide text-slate-400">Shorthand expanded ({expansions.length})</div>
+              <ul className="mt-1 space-y-0.5 text-sm">
+                {expansions.map((e, i) => (
+                  <li key={i} className="text-slate-700"><span className="font-mono text-slate-500">{e.from}</span> → {e.to}</li>
+                ))}
+              </ul>
+            </div>
+          )}
+          {mode === "freetext" && nudges.length > 0 && (
+            <div className="mb-4 rounded-lg bg-amber-50 px-3 py-2 text-sm text-amber-900">
+              <span className="font-medium">Gaps to fill ({nudges.length}):</span> {nudges.map((n) => n.label).join(" · ")}
+            </div>
+          )}
 
           {sections.map(({ section, items }) => (
             <div key={section} className="mb-5">
