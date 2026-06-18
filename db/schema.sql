@@ -80,6 +80,8 @@ CREATE INDEX IF NOT EXISTS idx_audit_session     ON note_audit(session_id);
 -- ============================================================================
 ALTER TABLE note_sessions ADD COLUMN IF NOT EXISTS mode TEXT NOT NULL DEFAULT 'qa';
 ALTER TABLE note_sessions ADD COLUMN IF NOT EXISTS raw_input TEXT;
+-- v2.1 (R1): the always-editable live document
+ALTER TABLE note_sessions ADD COLUMN IF NOT EXISTS editor_text TEXT;
 
 -- Mode B: log every shorthand→expansion so a curated lexicon can accrue later.
 CREATE TABLE IF NOT EXISTS expansion_log (
