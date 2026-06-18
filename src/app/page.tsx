@@ -62,7 +62,9 @@ export default function Home() {
   const [draft, setDraft] = useState("");
   const [nabh, setNabh] = useState<any>(null);
   const [faith, setFaith] = useState<any>(null);
+  const [grounding, setGrounding] = useState<any[]>([]);
   const [signer, setSigner] = useState("");
+  const [showDiff, setShowDiff] = useState(true);
 
   // ---- start a session ----
   async function start() {
@@ -129,6 +131,7 @@ export default function Home() {
     if (g.status === 422) { setNabh(g.json?.nabh); setMsg("Some required fields are missing — see highlights below."); return; }
     if (!g.ok) { setMsg("Generation failed: " + (g.json?.error || g.status)); return; }
     setNoteId(g.json.note_id); setDraft(g.json.draft_md || ""); setNabh(g.json.nabh); setFaith(g.json.faithfulness);
+    setGrounding(g.json.grounding || []);
     setMsg(""); setStep("review");
   }
 
@@ -147,7 +150,7 @@ export default function Home() {
 
   function reset() {
     setStep("home"); setNoteType(null); setProcedure(""); setUhid(""); setSessionId("");
-    setFields([]); setAnswers({}); setNoteId(""); setDraft(""); setNabh(null); setFaith(null); setSigner(""); setMsg("");
+    setFields([]); setAnswers({}); setNoteId(""); setDraft(""); setNabh(null); setFaith(null); setGrounding([]); setSigner(""); setMsg("");
   }
 
   return (
@@ -243,6 +246,26 @@ export default function Home() {
           {faith && !faith.ok && (
             <div className="rounded-lg bg-red-50 px-3 py-2 text-sm text-red-900">
               Unsupported content to verify: {[...(faith.orphan_entities || []), ...((faith.unsupported || []).map((u: any) => u.sentence_text))].slice(0, 8).join(" · ") || "see note"}
+            </div>
+          )}
+          {grounding.length > 0 && (
+            <div className="rounded-lg border border-slate-200">
+              <button onClick={() => setShowDiff(!showDiff)} className="flex w-full items-center justify-between px-3 py-2 text-sm font-medium text-slate-700">
+                <span>Grounding — what each line is based on ({grounding.length})</span>
+                <span className="text-xs text-slate-400">{showDiff ? "hide" : "show"}</span>
+              </button>
+              {showDiff && (
+                <ul className="max-h-56 space-y-1 overflow-auto border-t border-slate-100 px-3 py-2 text-xs">
+                  {grounding.map((g: any) => (
+                    <li key={g.sentence_id} className={`rounded px-2 py-1 ${g.supported ? "bg-slate-50" : "bg-red-50"}`}>
+                      <span className="text-slate-700">{g.sentence_text}</span>{" "}
+                      <span className={g.supported ? "text-slate-400" : "font-medium text-red-600"}>
+                        {g.supported ? `↳ ${(g.source_field_keys || []).join(", ")}` : "↳ unsupported — verify"}
+                      </span>
+                    </li>
+                  ))}
+                </ul>
+              )}
             </div>
           )}
           <p className="text-xs text-slate-500">Review and correct before signing. You are the author of record.</p>

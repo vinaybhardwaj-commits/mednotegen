@@ -45,10 +45,13 @@ ${answersBlock}
 
 Compose the note now per the rules. Return ONLY the JSON object.`;
 
-  const raw = await gemini(prompt, { tier: "reasoning", system: GROUNDING_CONTRACT, json: true });
-
-  // TODO(P1-C4): zod-validate; retry once on malformed JSON.
-  const parsed = JSON.parse(raw);
+  // Robust parse: strip code fences; retry once on malformed JSON before giving up.
+  let parsed: any = null;
+  for (let attempt = 0; attempt < 2 && !parsed; attempt++) {
+    const raw = await gemini(prompt, { tier: "reasoning", system: GROUNDING_CONTRACT, json: true });
+    try { parsed = JSON.parse(stripFences(raw)); }
+    catch { if (attempt === 1) throw new Error("composer returned non-JSON twice"); }
+  }
   const grounding: GroundingEntry[] = (parsed.grounding_map ?? []).map((g: any) => ({
     sentence_id: g.sentence_id,
     sentence_text: g.sentence_text,
@@ -57,4 +60,11 @@ Compose the note now per the rules. Return ONLY the JSON object.`;
   }));
 
   return { markdown: parsed.markdown ?? "", grounding };
+}
+
+/** Strip ```json … ``` fences a model may wrap JSON in. */
+function stripFences(s: string): string {
+  const t = s.trim();
+  if (t.startsWith("```")) return t.replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/, "").trim();
+  return t;
 }
