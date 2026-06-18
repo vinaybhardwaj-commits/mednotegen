@@ -12,11 +12,12 @@ export const maxDuration = 30;
  * Grounding: completions may add structure / standard phrasing / prompts for missing
  * items, but NEVER invent specific patient values — unknown specifics become "___".
  */
-const SYSTEM = `You are a writing assistant helping a doctor compose a clinical note. You suggest how to CONTINUE or COMPLETE the note.
+const SYSTEM = `You are a writing assistant helping a doctor compose a clinical note. You suggest how to CONTINUE or COMPLETE the note, and propose faithful wording REWRITES.
 HARD RULES:
 1. Build only on what the doctor has written. NEVER invent a specific clinical value, finding, name, dose, count, time or number. For any specific the doctor must supply, write a blank "___".
 2. Keep suggestions short and in standard clinical phrasing.
 3. Prioritise the still-missing items provided.
+4. REWRITES: faithfully expand medical shorthand/abbreviations (e.g. "NAD" -> "no abnormality detected", "EBL" -> "estimated blood loss", "pt" -> "patient") or tidy obviously rough wording — WITHOUT changing clinical meaning and WITHOUT inventing detail. Each rewrite "from" must be copied VERBATIM from the note.
 Return STRICT JSON only.`;
 
 export async function POST(req: NextRequest) {
@@ -38,7 +39,8 @@ CURRENT NOTE:
 Return JSON:
 {
   "inline": "ONLY the NEW words to append at the very end — do NOT repeat any words already written. <=14 words. Use ___ for unknown specifics. Empty string if nothing sensible to add.",
-  "chips": ["up to 3 short phrases (<=10 words each) the doctor could insert to cover the missing items, each using ___ for unknown values"]
+  "chips": ["up to 3 short phrases (<=10 words each) the doctor could insert to cover the missing items, each using ___ for unknown values"],
+  "rewrites": [{ "from": "<exact substring copied verbatim from the note>", "to": "<faithful expansion or tidy>" }]
 }`;
 
   try {
@@ -48,9 +50,16 @@ Return JSON:
     const chips = Array.isArray(parsed.chips)
       ? parsed.chips.filter((c: unknown) => typeof c === "string" && c.trim()).slice(0, 3).map((c: string) => c.trim().slice(0, 90))
       : [];
-    return NextResponse.json({ inline, chips });
+    // Only keep rewrites whose `from` is actually present in the note (so the client can locate the span).
+    const rewrites = Array.isArray(parsed.rewrites)
+      ? parsed.rewrites
+          .filter((r: any) => r && typeof r.from === "string" && typeof r.to === "string" && r.from.trim() && r.from !== r.to && text.includes(r.from))
+          .slice(0, 4)
+          .map((r: any) => ({ from: r.from, to: r.to.slice(0, 120) }))
+      : [];
+    return NextResponse.json({ inline, chips, rewrites });
   } catch {
-    return NextResponse.json({ inline: "", chips: [] });
+    return NextResponse.json({ inline: "", chips: [], rewrites: [] });
   }
 }
 

@@ -23,6 +23,7 @@ export default function Home() {
   const [floor, setFloor] = useState<FloorField[]>([]);
   const [sheetOpen, setSheetOpen] = useState(false);
   const [chips, setChips] = useState<string[]>([]);
+  const [rewrites, setRewrites] = useState<{ from: string; to: string }[]>([]);
   const [thinking, setThinking] = useState(false);
 
   const words = useMemo(() => (text.trim() ? text.trim().split(/\s+/).length : 0), [text]);
@@ -91,6 +92,9 @@ export default function Home() {
       const j = await r.json();
       if (ctrl.signal.aborted) return;
       setChips(Array.isArray(j.chips) ? j.chips : []);
+      const rw = Array.isArray(j.rewrites) ? j.rewrites : [];
+      setRewrites(rw);
+      if (editorRef.current) editorRef.current.commands.setRewrites(rw);
       if (j.inline && editorRef.current) editorRef.current.commands.setSuggestion(" " + String(j.inline).trim());
     } catch { /* aborted or error */ } finally { if (!ctrl.signal.aborted) setThinking(false); }
   }, [api]);
@@ -99,7 +103,7 @@ export default function Home() {
     setText(t); textRef.current = t; htmlRef.current = h;
     if (saveTimer.current) clearTimeout(saveTimer.current);
     setSave("saving"); saveTimer.current = setTimeout(flushSave, 800);
-    setChips([]); // clear stale suggestions immediately
+    setChips([]); setRewrites([]); // clear stale suggestions immediately (editor self-clears on docChanged)
     if (analyzeTimer.current) clearTimeout(analyzeTimer.current);
     analyzeTimer.current = setTimeout(runAnalyze, 400);
   }, [flushSave, runAnalyze]);
@@ -112,6 +116,19 @@ export default function Home() {
     const lead = textRef.current && !/\s$/.test(textRef.current) ? " " : "";
     ed.chain().focus().insertContent(lead + c).run();
     setChips([]);
+  }
+
+  function acceptRewrite(r: { from: string; to: string }) {
+    const ed = editorRef.current;
+    if (ed) ed.chain().focus().acceptRewrite(r.from, r.to).run();
+    if (sessionIdRef.current) api(`/api/sessions/${sessionIdRef.current}/expansions`, { method: "POST", body: JSON.stringify({ from: r.from, to: r.to }) }).catch(() => {});
+    setRewrites([]);
+  }
+
+  function dismissRewrite(r: { from: string; to: string }) {
+    const remaining = rewrites.filter((x) => x.from !== r.from || x.to !== r.to);
+    setRewrites(remaining);
+    if (editorRef.current) editorRef.current.commands.setRewrites(remaining);
   }
 
   function pickNoteType(key: string) {
@@ -150,9 +167,23 @@ export default function Home() {
       </main>
 
       <button className="mng-assistant-handle" onClick={() => setSheetOpen(true)} aria-label="Open assistant">
-        <span><i className="ti ti-clipboard-check" aria-hidden="true" /> Assistant · {floor.length ? `${gaps} gap${gaps === 1 ? "" : "s"}` : "live nudges"}</span>
+        <span><i className="ti ti-clipboard-check" aria-hidden="true" /> Assistant · {floor.length ? `${gaps} gap${gaps === 1 ? "" : "s"}` : "live nudges"}{rewrites.length ? ` · ${rewrites.length} rewrite${rewrites.length === 1 ? "" : "s"}` : ""}</span>
         <i className="ti ti-chevron-up" aria-hidden="true" />
       </button>
+
+      {rewrites.length > 0 && (
+        <div className="mng-rwbar">
+          <i className="ti ti-wand mng-ai" aria-hidden="true" />
+          {rewrites.map((r, i) => (
+            <span key={i} className="mng-rwpill">
+              <span style={{ textDecoration: "line-through", color: "var(--mng-muted)" }}>{r.from}</span>
+              <span className="arrow">→</span> {r.to}
+              <button className="mng-rwbtn ok" onClick={() => acceptRewrite(r)} aria-label="Accept"><i className="ti ti-check" aria-hidden="true" /></button>
+              <button className="mng-rwbtn no" onClick={() => dismissRewrite(r)} aria-label="Dismiss"><i className="ti ti-x" aria-hidden="true" /></button>
+            </span>
+          ))}
+        </div>
+      )}
 
       {chips.length > 0 && (
         <div className="mng-sugbar">
