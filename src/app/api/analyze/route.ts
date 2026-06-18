@@ -37,7 +37,7 @@ CURRENT NOTE:
 
 Return JSON:
 {
-  "inline": "a natural <=14-word continuation to append at the very end (use ___ for unknown specifics; empty string if nothing sensible to add)",
+  "inline": "ONLY the NEW words to append at the very end — do NOT repeat any words already written. <=14 words. Use ___ for unknown specifics. Empty string if nothing sensible to add.",
   "chips": ["up to 3 short phrases (<=10 words each) the doctor could insert to cover the missing items, each using ___ for unknown values"]
 }`;
 
