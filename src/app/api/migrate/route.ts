@@ -29,7 +29,11 @@ export async function POST(req: NextRequest) {
     for (const f of files) {
       const text = await readFile(path.join(root, f), "utf8");
       const statements = splitSql(text);
-      for (const stmt of statements) {
+      for (const raw of statements) {
+        // make seed inserts idempotent so the migration can be re-run safely
+        const stmt = /^INSERT INTO/i.test(raw) && !/ON CONFLICT/i.test(raw)
+          ? raw + " ON CONFLICT DO NOTHING"
+          : raw;
         const tsa = Object.assign([stmt], { raw: [stmt] }) as unknown as TemplateStringsArray;
         await sql(tsa);
       }
@@ -46,13 +50,34 @@ export async function GET() {
   return NextResponse.json({ ok: true, hint: "POST with x-migration-secret to run." });
 }
 
-/** Strip line comments and split into statements on semicolons. */
+/**
+ * Split SQL into statements on semicolons, while ignoring semicolons inside
+ * single-quoted string literals and `--` line comments. Comments are dropped.
+ */
 function splitSql(text: string): string[] {
-  return text
-    .split("\n")
-    .filter((l) => !l.trim().startsWith("--"))
-    .join("\n")
-    .split(";")
-    .map((s) => s.trim())
-    .filter((s) => s.length > 0);
+  const out: string[] = [];
+  let cur = "";
+  let inStr = false;
+  for (let i = 0; i < text.length; i++) {
+    const c = text[i];
+    const n = text[i + 1];
+    if (inStr) {
+      cur += c;
+      if (c === "'") {
+        if (n === "'") { cur += n; i++; } // escaped '' inside a string
+        else inStr = false;
+      }
+      continue;
+    }
+    if (c === "'") { inStr = true; cur += c; continue; }
+    if (c === "-" && n === "-") { // line comment → skip to EOL
+      while (i < text.length && text[i] !== "\n") i++;
+      continue;
+    }
+    if (c === ";") { const s = cur.trim(); if (s) out.push(s); cur = ""; continue; }
+    cur += c;
+  }
+  const last = cur.trim();
+  if (last) out.push(last);
+  return out;
 }
