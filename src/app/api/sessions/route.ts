@@ -15,16 +15,17 @@ export async function POST(req: NextRequest) {
   }
 
   const id = genId("ses");
+  const mode = body.mode === "freetext" ? "freetext" : "qa";
   await sql`
-    INSERT INTO note_sessions (id, doctor_id, patient_ref, note_type, procedure, status)
+    INSERT INTO note_sessions (id, doctor_id, patient_ref, note_type, procedure, status, mode, raw_input)
     VALUES (${id}, ${body.doctor_id ?? null}, ${body.patient_ref ?? null},
-            ${noteType}, ${body.procedure ?? null}, 'started')
+            ${noteType}, ${body.procedure ?? null}, 'started', ${mode}, ${body.raw_input ?? null})
   `;
   await sql`
     INSERT INTO note_audit (session_id, event, actor, payload)
     VALUES (${id}, 'session_started', ${body.doctor_id ?? "unknown"},
-            ${JSON.stringify({ noteType, procedure: body.procedure ?? null })}::jsonb)
+            ${JSON.stringify({ noteType, procedure: body.procedure ?? null, mode })}::jsonb)
   `;
 
-  return NextResponse.json({ id, note_type: noteType, status: "started" });
+  return NextResponse.json({ id, note_type: noteType, mode, status: "started" });
 }

@@ -74,3 +74,19 @@ CREATE TABLE IF NOT EXISTS note_audit (
 CREATE INDEX IF NOT EXISTS idx_sessions_status   ON note_sessions(status);
 CREATE INDEX IF NOT EXISTS idx_answers_session   ON note_answers(session_id);
 CREATE INDEX IF NOT EXISTS idx_audit_session     ON note_audit(session_id);
+
+-- ============================================================================
+-- v1.2 input-mode additions (PRD §5A) — idempotent; safe to re-run.
+-- ============================================================================
+ALTER TABLE note_sessions ADD COLUMN IF NOT EXISTS mode TEXT NOT NULL DEFAULT 'qa';
+ALTER TABLE note_sessions ADD COLUMN IF NOT EXISTS raw_input TEXT;
+
+-- Mode B: log every shorthand→expansion so a curated lexicon can accrue later.
+CREATE TABLE IF NOT EXISTS expansion_log (
+    id         BIGSERIAL PRIMARY KEY,
+    session_id TEXT,
+    note_type  TEXT,
+    from_text  TEXT NOT NULL,
+    to_text    TEXT NOT NULL,
+    ts         TIMESTAMPTZ NOT NULL DEFAULT now()
+);
