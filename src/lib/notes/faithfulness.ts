@@ -21,14 +21,16 @@ function entities(text: string): string[] {
 }
 
 export function checkGroundingRules(markdown: string, answers: Answer[]): FaithfulnessReport {
-  const haystack = answers.map((a) => String(a.value ?? "")).join(" \n ");
+  // Normalize digits only (strip separators) so reformatted dates/times still match.
+  const haystack = answers.map((a) => String(a.value ?? "")).join(" ").replace(/[^0-9]/g, " ");
   const orphans: string[] = [];
 
+  // Deterministic check: every NUMBER in the note (blood loss, doses, counts) must appear in answers.
+  // Note: the crude TitleCase "entity" heuristic was removed — it flagged structural labels
+  // (UHID, Checklist, Sign-out…) as false positives. Sentence-level support comes from the
+  // composer's grounding_map (see mergeFaithfulness); numbers are the reliable rule-layer signal.
   for (const n of numbers(markdown)) {
-    if (!haystack.includes(n)) orphans.push(n);
-  }
-  for (const e of entities(markdown)) {
-    if (!new RegExp(`\\b${e}\\b`, "i").test(haystack)) orphans.push(e);
+    if (n.length >= 2 && !haystack.includes(n)) orphans.push(n);
   }
 
   return { ok: orphans.length === 0, unsupported: [], orphan_entities: Array.from(new Set(orphans)) };

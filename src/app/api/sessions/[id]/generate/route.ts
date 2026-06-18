@@ -46,8 +46,12 @@ export async function POST(_req: NextRequest, { params }: { params: { id: string
     const ruleReport = checkGroundingRules(composed.markdown, answers);
     const faithfulness = mergeFaithfulness(composed.grounding, ruleReport);
 
-    // 4) Humanize (style only; reverts on fact drift)
-    const humanized = await humanize(composed.markdown, answers);
+    // 4) Humanize (constrained cleanup; style only, reverts on fact drift).
+    // Flag-gated off by default — it's a second LLM pass that ~doubles latency. The
+    // composed note is already grounded; enable HUMANIZE_ENABLED=1 when latency budget allows.
+    const humanized = process.env.HUMANIZE_ENABLED === "1"
+      ? await humanize(composed.markdown, answers)
+      : composed.markdown;
 
     // 5) Persist draft + grounding map + audit
     const noteId = genId("note");

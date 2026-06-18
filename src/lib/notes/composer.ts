@@ -10,7 +10,7 @@ RULES (priority order):
 1. Use ONLY facts present in ANSWERS. Never introduce any clinical fact, value, name, time, count or finding not in ANSWERS.
 2. Insert numbers, drug names, implant/lot details and proper nouns EXACTLY as given — never paraphrase, round or normalize.
 3. If a required item is absent, write "Not documented" — never guess.
-4. Follow the section order and house style of the SKELETON.
+4. Write the note as a proper clinical note in flowing PROSE under markdown section headings (use "### Heading"). Do NOT output a flat "label: value" list. Group the fields into natural clinical sections (a header block with patient identifiers and team; diagnosis; procedure & anaesthesia; operative findings and salient steps; implant/specimen/blood loss/counts; complications; post-operative plan & advice; sign-off) and write the sentences a surgeon would actually write, weaving the answer values into prose. A short identifier header table is fine, but the body must be prose.
 5. Output strict JSON: { "markdown": string, "grounding_map": [ { "sentence_id": number, "sentence_text": string, "source_field_keys": string[] } ] }.
 A sentence you cannot map to an ANSWERS field_key is a rule violation.`;
 
