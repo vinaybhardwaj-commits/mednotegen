@@ -123,3 +123,18 @@ body {
 .mng-cov-ico { font-size: 18px; }
 .mng-cov-ico.has { color: #059669; }
 .mng-cov-ico.need { color: var(--mng-warn); }
+
+/* ---- R3: ghost-text completion + keyboard suggestion bar ---- */
+.mng-ghost { color: var(--mng-muted); opacity: .7; }
+.mng-sugbar {
+  display: flex; align-items: center; gap: 8px; overflow-x: auto;
+  padding: 8px 12px; border-top: 1px solid var(--mng-border);
+  -webkit-overflow-scrolling: touch;
+}
+.mng-sugbar .mng-ai { font-size: 16px; color: var(--mng-accent); flex: none; }
+.mng-chip {
+  white-space: nowrap; font-size: 13px; border: 1px solid var(--mng-border);
+  background: var(--mng-surface); color: var(--mng-text);
+  border-radius: 999px; padding: 6px 12px; cursor: pointer; flex: none;
+}
+.mng-chip:active { background: var(--mng-accent-weak); }

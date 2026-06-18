@@ -1,8 +1,9 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import type { Editor } from "@tiptap/react";
 import NoteEditor from "@/components/NoteEditor";
-import { computeCoverage, type FloorField } from "@/lib/coverage";
+import { computeCoverage, type Coverage, type FloorField } from "@/lib/coverage";
 
 const NOTE_TYPES = [
   { key: "ot_note", label: "Op note" },
@@ -21,17 +22,24 @@ export default function Home() {
   const [save, setSave] = useState<SaveState>("idle");
   const [floor, setFloor] = useState<FloorField[]>([]);
   const [sheetOpen, setSheetOpen] = useState(false);
+  const [chips, setChips] = useState<string[]>([]);
+  const [thinking, setThinking] = useState(false);
 
   const words = useMemo(() => (text.trim() ? text.trim().split(/\s+/).length : 0), [text]);
   const current = NOTE_TYPES.find((n) => n.key === noteType)!;
-  const coverage = useMemo(() => computeCoverage(floor, text), [floor, text]);
+  const coverage = useMemo<Coverage>(() => computeCoverage(floor, text), [floor, text]);
   const gaps = coverage.total - coverage.covered;
 
   const sessionIdRef = useRef<string>("");
   const htmlRef = useRef<string>("");
-  const noteTypeRef = useRef<string>(noteType);
-  noteTypeRef.current = noteType;
+  const textRef = useRef<string>("");
+  const noteTypeRef = useRef<string>(noteType); noteTypeRef.current = noteType;
+  const coverageRef = useRef<Coverage>(coverage); coverageRef.current = coverage;
+  const editorRef = useRef<Editor | null>(null);
   const saveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const analyzeTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const analyzeCtrl = useRef<AbortController | null>(null);
+  const lastAnalyzed = useRef<string>("");
 
   const api = useCallback(
     (path: string, init?: RequestInit) =>
@@ -39,13 +47,11 @@ export default function Home() {
     [token],
   );
 
-  // Load the NABH floor for the selected note type (drives live coverage).
   useEffect(() => {
     if (!token) return;
     let cancelled = false;
     api(`/api/nabh-requirements?note_type=${noteType}`)
-      .then((r) => r.json())
-      .then((j) => { if (!cancelled) setFloor((j.fields || []) as FloorField[]); })
+      .then((r) => r.json()).then((j) => { if (!cancelled) setFloor((j.fields || []) as FloorField[]); })
       .catch(() => {});
     return () => { cancelled = true; };
   }, [noteType, token, api]);
@@ -69,16 +75,48 @@ export default function Home() {
     } catch { setSave("error"); }
   }, [api, ensureSession]);
 
-  const scheduleSave = useCallback(() => {
-    if (saveTimer.current) clearTimeout(saveTimer.current);
-    setSave("saving");
-    saveTimer.current = setTimeout(flushSave, 800);
-  }, [flushSave]);
+  // R3: aggressive live completions — debounced, cancel-in-flight, text-hash cache.
+  const runAnalyze = useCallback(async () => {
+    const t = textRef.current.trim();
+    if (t.length < 8) { setChips([]); return; }
+    if (t === lastAnalyzed.current) return;
+    lastAnalyzed.current = t;
+    analyzeCtrl.current?.abort();
+    const ctrl = new AbortController();
+    analyzeCtrl.current = ctrl;
+    setThinking(true);
+    try {
+      const gapLabels = coverageRef.current.items.filter((i) => !i.covered).map((i) => i.label);
+      const r = await api("/api/analyze", { method: "POST", body: JSON.stringify({ text: t, note_type: noteTypeRef.current, gaps: gapLabels }), signal: ctrl.signal });
+      const j = await r.json();
+      if (ctrl.signal.aborted) return;
+      setChips(Array.isArray(j.chips) ? j.chips : []);
+      if (j.inline && editorRef.current) editorRef.current.commands.setSuggestion(" " + String(j.inline).trim());
+    } catch { /* aborted or error */ } finally { if (!ctrl.signal.aborted) setThinking(false); }
+  }, [api]);
 
-  function onEditorChange(t: string, h: string) { setText(t); htmlRef.current = h; scheduleSave(); }
+  const onEditorChange = useCallback((t: string, h: string) => {
+    setText(t); textRef.current = t; htmlRef.current = h;
+    if (saveTimer.current) clearTimeout(saveTimer.current);
+    setSave("saving"); saveTimer.current = setTimeout(flushSave, 800);
+    setChips([]); // clear stale suggestions immediately
+    if (analyzeTimer.current) clearTimeout(analyzeTimer.current);
+    analyzeTimer.current = setTimeout(runAnalyze, 400);
+  }, [flushSave, runAnalyze]);
+
+  const handleReady = useCallback((ed: Editor) => { editorRef.current = ed; }, []);
+
+  function applyChip(c: string) {
+    const ed = editorRef.current;
+    if (!ed) return;
+    const lead = textRef.current && !/\s$/.test(textRef.current) ? " " : "";
+    ed.chain().focus().insertContent(lead + c).run();
+    setChips([]);
+  }
 
   function pickNoteType(key: string) {
     setNoteType(key);
+    lastAnalyzed.current = ""; setChips([]);
     if (sessionIdRef.current) {
       api(`/api/sessions/${sessionIdRef.current}/editor`, { method: "PUT", body: JSON.stringify({ note_type: key }) }).catch(() => {});
     }
@@ -92,9 +130,7 @@ export default function Home() {
   return (
     <div className="mng-shell">
       <header className="mng-header">
-        <button className="mng-iconbtn" aria-label="Back" style={{ width: 36, height: 36, border: 0 }}>
-          <i className="ti ti-chevron-left" aria-hidden="true" />
-        </button>
+        <button className="mng-iconbtn" aria-label="Back" style={{ width: 36, height: 36, border: 0 }}><i className="ti ti-chevron-left" aria-hidden="true" /></button>
         <span className="mng-title">New note</span>
         <span className={"mng-pill" + (pillFull ? " ok" : "")}>
           <i className="ti ti-shield-check" aria-hidden="true" /> NABH {floor.length ? `${coverage.covered}/${coverage.total}` : "—"}
@@ -104,15 +140,13 @@ export default function Home() {
       <div className="mng-slider" role="tablist" aria-label="Note type">
         {NOTE_TYPES.map((n) => (
           <button key={n.key} role="tab" aria-selected={noteType === n.key}
-            className={"mng-seg" + (noteType === n.key ? " on" : "")} onClick={() => pickNoteType(n.key)}>
-            {n.label}
-          </button>
+            className={"mng-seg" + (noteType === n.key ? " on" : "")} onClick={() => pickNoteType(n.key)}>{n.label}</button>
         ))}
       </div>
 
       <main className="mng-editorwrap">
-        <div className="mng-editor-label">{current.label} · you are the author</div>
-        <NoteEditor onChange={onEditorChange} />
+        <div className="mng-editor-label">{current.label} · you are the author{thinking ? " · thinking…" : ""}</div>
+        <NoteEditor onChange={onEditorChange} onReady={handleReady} />
       </main>
 
       <button className="mng-assistant-handle" onClick={() => setSheetOpen(true)} aria-label="Open assistant">
@@ -120,14 +154,17 @@ export default function Home() {
         <i className="ti ti-chevron-up" aria-hidden="true" />
       </button>
 
+      {chips.length > 0 && (
+        <div className="mng-sugbar">
+          <i className="ti ti-bulb mng-ai" aria-hidden="true" />
+          {chips.map((c, i) => (<button key={i} className="mng-chip" onClick={() => applyChip(c)}>{c}</button>))}
+        </div>
+      )}
+
       <div className="mng-actionbar">
-        <button className="mng-iconbtn" aria-label="Dictate (via EvenScribe at port)" disabled>
-          <i className="ti ti-microphone" aria-hidden="true" />
-        </button>
+        <button className="mng-iconbtn" aria-label="Dictate (via EvenScribe at port)" disabled><i className="ti ti-microphone" aria-hidden="true" /></button>
         <button className="mng-primary" disabled>Compose &amp; format</button>
-        <button className="mng-iconbtn" aria-label="Sign" disabled>
-          <i className="ti ti-signature" aria-hidden="true" />
-        </button>
+        <button className="mng-iconbtn" aria-label="Sign" disabled><i className="ti ti-signature" aria-hidden="true" /></button>
       </div>
       <div className="mng-foot">
         {words} words{saveLabel && (<> · <i className={"ti " + (save === "saved" ? "ti-circle-check" : save === "error" ? "ti-alert-circle" : "ti-loader-2")} style={{ verticalAlign: "-2px" }} aria-hidden="true" /> {saveLabel}</>)}
