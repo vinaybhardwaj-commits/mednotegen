@@ -9,7 +9,7 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
   const format = req.nextUrl.searchParams.get("format") ?? "docx";
 
   const rows = (await sql`
-    SELECT g.final_md, g.draft_md, s.patient_ref
+    SELECT g.final_md, g.draft_md, s.patient_ref, s.note_type
     FROM generated_notes g JOIN note_sessions s ON s.id = g.session_id
     WHERE g.session_id = ${params.id}
     ORDER BY g.created_at DESC LIMIT 1
@@ -24,7 +24,13 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
     return NextResponse.json({ error: "format must be docx or md" }, { status: 400 });
   }
 
-  const buf = await toDocx(md, { title: "Operative Note", uhid: rows[0].patient_ref ?? "" });
+  const TITLES: Record<string, string> = {
+    ot_note: "Operative Note",
+    discharge_summary: "Discharge Summary",
+    opd_rx: "Prescription",
+  };
+  const title = TITLES[rows[0].note_type as string] ?? "Clinical Note";
+  const buf = await toDocx(md, { title, uhid: rows[0].patient_ref ?? "" });
   return new NextResponse(new Uint8Array(buf), {
     headers: {
       "content-type": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",

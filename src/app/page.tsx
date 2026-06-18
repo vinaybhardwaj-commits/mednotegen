@@ -4,7 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { Editor } from "@tiptap/react";
 import NoteEditor from "@/components/NoteEditor";
 import { computeCoverage, type Coverage, type FloorField } from "@/lib/coverage";
-import { mdToHtml, wordDiff, type DiffToken } from "@/lib/md";
+import { mdToHtml, wordDiff, editorJsonToMarkdown, type DiffToken } from "@/lib/md";
 
 const NOTE_TYPES = [
   { key: "ot_note", label: "Op note" },
@@ -34,6 +34,9 @@ export default function Home() {
   const [signing, setSigning] = useState(false);
   const [signed, setSigned] = useState(false);
   const [lockedCov, setLockedCov] = useState<{ covered: number; total: number } | null>(null);
+  const [exportOpen, setExportOpen] = useState(false);
+  const [signedHtml, setSignedHtml] = useState("");
+  const [toast, setToast] = useState("");
 
   const words = useMemo(() => (text.trim() ? text.trim().split(/\s+/).length : 0), [text]);
   const current = NOTE_TYPES.find((n) => n.key === noteType)!;
@@ -58,6 +61,8 @@ export default function Home() {
   const analyzeCtrl = useRef<AbortController | null>(null);
   const lastAnalyzed = useRef<string>("");
   const lockRef = useRef<boolean>(false); // true from the moment Sign begins — kills late ghost/analyze
+  const signedMdRef = useRef<string>("");  // final markdown of the signed note (for copy/PDF)
+  const signedAtRef = useRef<string>("");  // date stamp shown on the print/PDF view
 
   const api = useCallback(
     (path: string, init?: RequestInit) =>
@@ -183,10 +188,14 @@ export default function Home() {
     ed.commands.clearSuggestion(); ed.commands.clearRewrites();
     setChips([]); setRewrites([]);
     const labels = needed.map((n) => n.label).join(", ");
-    const footer = labels ? `\n\n---\nNABH — items not documented: ${labels}.` : "";
-    const finalMd = ed.getText({ blockSeparator: "\n\n" }) + footer;
-    if (footer) ed.chain().focus("end").insertContent(`<p></p><p><em>NABH — items not documented: ${labels}.</em></p>`).run();
+    // Append a divider + italic NABH-gaps footer INTO the editor, then serialize the whole
+    // document to clean markdown — so the stored note + every export carries real headings.
+    if (labels) ed.chain().focus("end").insertContent(`<hr><p><em>NABH — items not documented: ${labels}.</em></p>`).run();
     ed.commands.clearSuggestion(); ed.commands.clearRewrites();
+    const finalMd = editorJsonToMarkdown(ed.getJSON() as Parameters<typeof editorJsonToMarkdown>[0]);
+    signedMdRef.current = finalMd;
+    signedAtRef.current = new Date().toLocaleString();
+    setSignedHtml(ed.getHTML());
     (async () => {
       try {
         const id = await ensureSession();
@@ -194,6 +203,35 @@ export default function Home() {
         if (r.ok) { setSigned(true); ed.setEditable(false); setSignOpen(false); setChips([]); setRewrites([]); ed.commands.clearSuggestion(); ed.commands.clearRewrites(); }
       } finally { setSigning(false); }
     })();
+  }
+
+  // ---- R6: export ----
+  function flashToast(msg: string) { setToast(msg); setTimeout(() => setToast(""), 2200); }
+
+  function downloadDocx() {
+    const id = sessionIdRef.current; if (!id) return;
+    const a = document.createElement("a");
+    a.href = `/api/sessions/${id}/export?format=docx&t=${encodeURIComponent(token)}`;
+    a.rel = "noopener";
+    document.body.appendChild(a); a.click(); a.remove();
+    setExportOpen(false);
+  }
+
+  function savePdf() {
+    setExportOpen(false);
+    // The print view (.mng-print) is in the DOM; @media print hides everything else.
+    setTimeout(() => window.print(), 120);
+  }
+
+  async function copyText() {
+    const md = signedMdRef.current || textRef.current;
+    try {
+      await navigator.clipboard.writeText(md);
+      flashToast("Note copied to clipboard");
+    } catch {
+      flashToast("Copy failed — long-press to select");
+    }
+    setExportOpen(false);
   }
 
   const saveLabel = save === "saving" ? "saving…" : save === "saved" ? "saved" : save === "error" ? "save failed — retry" : "";
@@ -253,9 +291,15 @@ export default function Home() {
       )}
 
       <div className="mng-actionbar">
-        <button className="mng-iconbtn" aria-label="Dictate (via EvenScribe at port)" disabled><i className="ti ti-microphone" aria-hidden="true" /></button>
-        <button className="mng-primary" disabled={!canAct || composing} onClick={compose}>{composing ? "Composing…" : "Compose & format"}</button>
-        <button className="mng-iconbtn" aria-label="Sign" disabled={!canAct} onClick={() => setSignOpen(true)}><i className="ti ti-signature" aria-hidden="true" /></button>
+        {signed ? (
+          <button className="mng-primary" onClick={() => setExportOpen(true)}><i className="ti ti-share" aria-hidden="true" style={{ verticalAlign: "-2px", marginRight: 6 }} />Export / Share</button>
+        ) : (
+          <>
+            <button className="mng-iconbtn" aria-label="Dictate (via EvenScribe at port)" disabled><i className="ti ti-microphone" aria-hidden="true" /></button>
+            <button className="mng-primary" disabled={!canAct || composing} onClick={compose}>{composing ? "Composing…" : "Compose & format"}</button>
+            <button className="mng-iconbtn" aria-label="Sign" disabled={!canAct} onClick={() => setSignOpen(true)}><i className="ti ti-signature" aria-hidden="true" /></button>
+          </>
+        )}
       </div>
       <div className="mng-foot">
         {words} words{!signed && saveLabel && (<> · <i className={"ti " + (save === "saved" ? "ti-circle-check" : save === "error" ? "ti-alert-circle" : "ti-loader-2")} style={{ verticalAlign: "-2px" }} aria-hidden="true" /> {saveLabel}</>)}
@@ -316,6 +360,32 @@ export default function Home() {
               <button className="mng-primary" disabled={!signer.trim() || signing} onClick={doSign}>{signing ? "Signing…" : "Sign & lock"}</button>
             </div>
           </div>
+        </div>
+      )}
+
+      {exportOpen && (
+        <div className="mng-scrim" onClick={() => setExportOpen(false)}>
+          <div className="mng-sheet" onClick={(e) => e.stopPropagation()}>
+            <div className="mng-sheet-head">
+              <span><i className="ti ti-share" aria-hidden="true" /> Export / Share</span>
+              <button className="mng-sheet-x" onClick={() => setExportOpen(false)} aria-label="Close"><i className="ti ti-x" aria-hidden="true" /></button>
+            </div>
+            <div className="mng-sheet-body">
+              <button className="mng-export-row" onClick={downloadDocx}><i className="ti ti-file-type-docx mng-export-ico" aria-hidden="true" /><span><b>Download Word</b><small>.docx — editable in any EMR</small></span><i className="ti ti-download" aria-hidden="true" /></button>
+              <button className="mng-export-row" onClick={savePdf}><i className="ti ti-file-type-pdf mng-export-ico" aria-hidden="true" /><span><b>Save as PDF</b><small>print-ready, for the file or to share</small></span><i className="ti ti-printer" aria-hidden="true" /></button>
+              <button className="mng-export-row" onClick={copyText}><i className="ti ti-clipboard mng-export-ico" aria-hidden="true" /><span><b>Copy text</b><small>paste into EMR, email or chat</small></span><i className="ti ti-copy" aria-hidden="true" /></button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {toast && <div className="mng-toast"><i className="ti ti-check" aria-hidden="true" /> {toast}</div>}
+
+      {signed && (
+        <div className="mng-print" aria-hidden="true">
+          <h1>{current.label === "Op note" ? "Operative Note" : current.label === "Discharge" ? "Discharge Summary" : "Prescription"}</h1>
+          <div className="mng-print-meta">Signed by {signer} · {signedAtRef.current}</div>
+          <div className="mng-print-body" dangerouslySetInnerHTML={{ __html: signedHtml }} />
         </div>
       )}
     </div>

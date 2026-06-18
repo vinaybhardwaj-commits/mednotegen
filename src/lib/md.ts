@@ -27,6 +27,46 @@ export function mdToHtml(md: string): string {
   return html || "<p></p>";
 }
 
+/** Serialize a TipTap/ProseMirror doc (editor.getJSON()) to clean markdown.
+ *  Used at sign-time so the stored note (and every export — docx/PDF/clipboard) carries
+ *  real "### " headings, bullets and bold/italic rather than a flattened text dump. */
+type PMNode = { type?: string; attrs?: Record<string, unknown>; content?: PMNode[]; text?: string; marks?: { type: string }[] };
+
+function inlineMd(nodes: PMNode[] = []): string {
+  return nodes.map((n) => {
+    if (n.type === "hardBreak") return "\n";
+    if (n.type !== "text") return "";
+    let t = n.text ?? "";
+    const has = (m: string) => (n.marks || []).some((x) => x.type === m);
+    if (has("bold")) t = `**${t}**`;
+    if (has("italic")) t = `*${t}*`;
+    return t;
+  }).join("");
+}
+
+export function editorJsonToMarkdown(doc: PMNode | null | undefined): string {
+  const out: string[] = [];
+  const liText = (li: PMNode) => inlineMd(li.content?.[0]?.content || []);
+  const walk = (nodes: PMNode[] = []) => {
+    for (const n of nodes) {
+      switch (n.type) {
+        case "heading": {
+          const lvl = Math.min(Math.max(Number(n.attrs?.level) || 2, 1), 6);
+          out.push("#".repeat(lvl) + " " + inlineMd(n.content));
+          break;
+        }
+        case "paragraph": out.push(inlineMd(n.content)); break;
+        case "bulletList": for (const li of n.content || []) out.push("- " + liText(li)); break;
+        case "orderedList": { let i = 1; for (const li of n.content || []) out.push(`${i++}. ` + liText(li)); break; }
+        case "horizontalRule": out.push("---"); break;
+        default: if (n.content) walk(n.content);
+      }
+    }
+  };
+  walk(doc?.content || []);
+  return out.join("\n\n").replace(/\n{3,}/g, "\n\n").trim();
+}
+
 export type DiffToken = { t: "same" | "add" | "del"; w: string };
 
 /** LCS word-level diff (keeps whitespace tokens) for the compose before/after review. */
