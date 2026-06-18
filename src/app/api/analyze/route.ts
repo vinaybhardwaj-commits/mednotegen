@@ -1,8 +1,32 @@
 import { NextRequest, NextResponse } from "next/server";
+import { createHash } from "crypto";
 import { gemini, geminiEnabled } from "@/lib/vertex";
 
 export const runtime = "nodejs";
 export const maxDuration = 30;
+
+// R7 cost-harden: only the trailing window is needed for completions/rewrites; capping the
+// input (and the model's output) is the biggest token lever on long notes.
+const TAIL = 800;
+const MAX_OUTPUT_TOKENS = 320;
+
+// Tiny in-memory LRU (per warm lambda) so identical (note_type, text, gaps) requests — common
+// during a typing burst or when two devices view the same note — don't re-hit the model.
+type AnalyzeResult = { inline: string; chips: string[]; rewrites: { from: string; to: string }[] };
+const CACHE = new Map<string, { v: AnalyzeResult; at: number }>();
+const CACHE_MAX = 200;
+const CACHE_TTL = 5 * 60 * 1000;
+function cacheGet(k: string): AnalyzeResult | null {
+  const hit = CACHE.get(k);
+  if (!hit) return null;
+  if (Date.now() - hit.at > CACHE_TTL) { CACHE.delete(k); return null; }
+  CACHE.delete(k); CACHE.set(k, hit); // bump recency
+  return hit.v;
+}
+function cacheSet(k: string, v: AnalyzeResult) {
+  CACHE.set(k, { v, at: Date.now() });
+  if (CACHE.size > CACHE_MAX) CACHE.delete(CACHE.keys().next().value as string);
+}
 
 /**
  * POST /api/analyze  (R3: live contextual completions)
@@ -22,19 +46,23 @@ Return STRICT JSON only.`;
 
 export async function POST(req: NextRequest) {
   const body = await req.json().catch(() => ({}));
-  const text = String(body.text ?? "").trim();
+  const text = String(body.text ?? "").trim().slice(-TAIL);
   const noteType = String(body.note_type ?? "ot_note");
   const gaps = Array.isArray(body.gaps) ? body.gaps.slice(0, 6).map(String) : [];
 
   if (!geminiEnabled() || text.length < 8) {
-    return NextResponse.json({ inline: "", chips: [] });
+    return NextResponse.json({ inline: "", chips: [], rewrites: [] });
   }
+
+  const key = createHash("sha1").update(`${noteType}${text}${gaps.join("|")}`).digest("hex");
+  const cached = cacheGet(key);
+  if (cached) return NextResponse.json({ ...cached, cached: true });
 
   const prompt = `NOTE TYPE: ${noteType}
 STILL-MISSING items (prioritise these): ${gaps.join(", ") || "none"}
 
 CURRENT NOTE:
-"""${text.slice(-1500)}"""
+"""${text}"""
 
 Return JSON:
 {
@@ -44,7 +72,7 @@ Return JSON:
 }`;
 
   try {
-    const raw = await gemini(prompt, { tier: "utility", system: SYSTEM, json: true });
+    const raw = await gemini(prompt, { tier: "utility", system: SYSTEM, json: true, maxOutputTokens: MAX_OUTPUT_TOKENS });
     const parsed = JSON.parse(stripFences(raw));
     const inline = typeof parsed.inline === "string" ? parsed.inline.slice(0, 160) : "";
     const chips = Array.isArray(parsed.chips)
@@ -57,7 +85,9 @@ Return JSON:
           .slice(0, 4)
           .map((r: any) => ({ from: r.from, to: r.to.slice(0, 120) }))
       : [];
-    return NextResponse.json({ inline, chips, rewrites });
+    const result: AnalyzeResult = { inline, chips, rewrites };
+    cacheSet(key, result);
+    return NextResponse.json(result);
   } catch {
     return NextResponse.json({ inline: "", chips: [], rewrites: [] });
   }

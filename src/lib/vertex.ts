@@ -38,6 +38,7 @@ export interface ChatOpts {
   system?: string;
   temperature?: number;
   json?: boolean;
+  maxOutputTokens?: number;
 }
 
 /** Single-shot generate. Returns the model's text. */
@@ -49,6 +50,7 @@ export async function gemini(prompt: string, opts: ChatOpts = {}): Promise<strin
     generationConfig: {
       temperature: opts.temperature ?? (tier === "reasoning" ? 0.2 : 0.4),
       responseMimeType: opts.json ? "application/json" : "text/plain",
+      ...(opts.maxOutputTokens ? { maxOutputTokens: opts.maxOutputTokens } : {}),
     },
   });
 

@@ -14,6 +14,13 @@ const NOTE_TYPES = [
 
 type SaveState = "idle" | "saving" | "saved" | "error";
 
+// R7 cost-harden: keep the assistant responsive but stop firing the LLM on every micro-pause.
+const A_DEBOUNCE = 450;       // collapse a typing burst
+const A_MIN_INTERVAL = 2500;  // hard floor between real /analyze calls
+const A_MIN_DELTA = 6;        // need this many new chars since last call…
+const A_IDLE_CATCHUP = 1300;  // …unless the doctor has clearly paused (then catch up)
+const A_TAIL = 800;           // only the trailing window matters for completions/rewrites
+
 export default function Home() {
   const [token, setToken] = useState("");
   useEffect(() => { setToken(new URLSearchParams(window.location.search).get("t") ?? ""); }, []);
@@ -60,6 +67,7 @@ export default function Home() {
   const analyzeTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const analyzeCtrl = useRef<AbortController | null>(null);
   const lastAnalyzed = useRef<string>("");
+  const lastAnalyzeAt = useRef<number>(0); // R7: throttle floor between real /analyze calls
   const lockRef = useRef<boolean>(false); // true from the moment Sign begins — kills late ghost/analyze
   const signedMdRef = useRef<string>("");  // final markdown of the signed note (for copy/PDF)
   const signedAtRef = useRef<string>("");  // date stamp shown on the print/PDF view
@@ -97,17 +105,16 @@ export default function Home() {
     } catch { setSave("error"); }
   }, [api, ensureSession]);
 
+  // Fire the actual /analyze call (tail-only context). Caller has already passed the gates.
   const runAnalyze = useCallback(async () => {
-    if (lockRef.current) return;
     const t = textRef.current.trim();
-    if (t.length < 8) { setChips([]); return; }
-    if (t === lastAnalyzed.current) return;
     lastAnalyzed.current = t;
+    lastAnalyzeAt.current = Date.now();
     analyzeCtrl.current?.abort();
     const ctrl = new AbortController(); analyzeCtrl.current = ctrl; setThinking(true);
     try {
       const gapLabels = coverageRef.current.items.filter((i) => !i.covered).map((i) => i.label);
-      const r = await api("/api/analyze", { method: "POST", body: JSON.stringify({ text: t, note_type: noteTypeRef.current, gaps: gapLabels }), signal: ctrl.signal });
+      const r = await api("/api/analyze", { method: "POST", body: JSON.stringify({ text: t.slice(-A_TAIL), note_type: noteTypeRef.current, gaps: gapLabels }), signal: ctrl.signal });
       const j = await r.json();
       if (ctrl.signal.aborted) return;
       setChips(Array.isArray(j.chips) ? j.chips : []);
@@ -118,15 +125,34 @@ export default function Home() {
     } catch { /* aborted */ } finally { if (!ctrl.signal.aborted) setThinking(false); }
   }, [api]);
 
+  // Gate + throttle layer: decides IF/WHEN to actually call runAnalyze. Reschedules itself
+  // rather than firing when a gate isn't met, so a paused doctor still gets a suggestion.
+  const scheduleAnalyze = useCallback((delay: number) => {
+    if (analyzeTimer.current) clearTimeout(analyzeTimer.current);
+    analyzeTimer.current = setTimeout(function tick() {
+      if (lockRef.current) return;
+      if (typeof document !== "undefined" && document.hidden) { scheduleAnalyze(A_IDLE_CATCHUP); return; }
+      if (typeof navigator !== "undefined" && navigator.onLine === false) { scheduleAnalyze(A_IDLE_CATCHUP); return; }
+      const full = textRef.current.trim();
+      if (full.length < 8) { setChips([]); return; }
+      if (full === lastAnalyzed.current) return;                 // nothing new
+      const sinceCall = Date.now() - lastAnalyzeAt.current;
+      if (sinceCall < A_MIN_INTERVAL) { scheduleAnalyze(A_MIN_INTERVAL - sinceCall); return; } // throttle floor
+      const newChars = Math.abs(full.length - lastAnalyzed.current.length);
+      const boundary = /[.\n:;,]\s*$/.test(textRef.current);     // finished a clause → good moment
+      if (newChars < A_MIN_DELTA && !boundary && full.length > 40) { scheduleAnalyze(A_IDLE_CATCHUP); return; }
+      runAnalyze();
+    }, delay);
+  }, [runAnalyze]);
+
   const onEditorChange = useCallback((t: string, h: string) => {
     setText(t); textRef.current = t; htmlRef.current = h;
     if (signed || lockRef.current) return;
     if (saveTimer.current) clearTimeout(saveTimer.current);
     setSave("saving"); saveTimer.current = setTimeout(flushSave, 800);
     setChips([]); setRewrites([]);
-    if (analyzeTimer.current) clearTimeout(analyzeTimer.current);
-    analyzeTimer.current = setTimeout(runAnalyze, 400);
-  }, [flushSave, runAnalyze, signed]);
+    scheduleAnalyze(A_DEBOUNCE);
+  }, [flushSave, scheduleAnalyze, signed]);
 
   const handleReady = useCallback((ed: Editor) => { editorRef.current = ed; }, []);
 
