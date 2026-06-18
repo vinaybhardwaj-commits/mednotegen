@@ -101,7 +101,7 @@ export default function Home() {
   }
 
   const isActive = useCallback((f: Field) => {
-    if (!f.conditional_on) return true;
+    if (!f.conditional_on || typeof f.conditional_on !== "string" || !f.conditional_on.includes("=")) return true;
     const [k, v] = f.conditional_on.split("=");
     return (answers[k] ?? "") === v;
   }, [answers]);
@@ -330,8 +330,8 @@ function FieldInput({ field, value, onChange }: { field: Field; value: string; o
   return (
     <label className="block">{labelRow}
       <div className="flex items-center gap-2">
-        <input className="inp" type={htmlType} value={value} onChange={(e) => onChange(e.target.value)} placeholder={field.help_text || ""} />
-        {field.unit && <span className="text-sm text-slate-500">{field.unit}</span>}
+        <input className="inp" type={htmlType} value={value} onChange={(e) => onChange(e.target.value)} placeholder={typeof field.help_text === "string" ? field.help_text : ""} />
+        {typeof field.unit === "string" && field.unit && <span className="text-sm text-slate-500">{field.unit}</span>}
       </div>
     </label>
   );

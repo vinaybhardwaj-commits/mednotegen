@@ -25,9 +25,9 @@ export async function generateSchema(
     LIMIT 1
   `) as any[];
 
-  let aiFields: QuestionField[] = [];
+  let aiFields: unknown[] = [];
   if (cached.length) {
-    aiFields = (cached[0].schema_json?.ai_fields ?? []) as QuestionField[];
+    aiFields = (cached[0].schema_json?.ai_fields ?? []) as unknown[];
   } else {
     aiFields = await proposeAiFields(noteType, procedure, floor);
     await sql`
@@ -41,12 +41,43 @@ export async function generateSchema(
   return { note_type: noteType, procedure, fields: mergeFields(floor, aiFields) };
 }
 
-/** Floor wins on key collision; AI fields appended after their section's floor fields. */
-function mergeFields(floor: QuestionField[], ai: QuestionField[]): QuestionField[] {
+const ALLOWED_TYPES = ["text","textarea","number","select","multiselect","toggle","date","time","datetime","drug_list","signature"];
+
+/** Coerce a (possibly messy) AI-proposed field into a safe, typed QuestionField. */
+function normalizeAiField(raw: unknown, idx: number): QuestionField {
+  const f = (raw ?? {}) as Record<string, unknown>;
+  // conditional_on may come back as a string "k=v", an object {field,value}, or junk → coerce to string|null
+  let cond: string | null = null;
+  if (typeof f.conditional_on === "string" && f.conditional_on.includes("=")) {
+    cond = f.conditional_on;
+  } else if (f.conditional_on && typeof f.conditional_on === "object") {
+    const o = f.conditional_on as Record<string, unknown>;
+    if (o.field != null && o.value != null) cond = `${normalize(String(o.field))}=${String(o.value)}`;
+  }
+  return {
+    field_key: normalize(String(f.field_key ?? f.label ?? `field_${idx}`)),
+    label: String(f.label ?? f.field_key ?? `Field ${idx}`),
+    input_type: (ALLOWED_TYPES.includes(String(f.input_type)) ? String(f.input_type) : "text") as QuestionField["input_type"],
+    section: String(f.section ?? "procedure"),
+    sort_order: 1000 + idx,
+    options: Array.isArray(f.options) ? f.options : undefined,
+    unit: typeof f.unit === "string" ? f.unit : null,
+    mandatory: !!f.mandatory,
+    allow_na: f.allow_na !== false,
+    default_value: typeof f.default_value === "string" ? f.default_value : null,
+    conditional_on: cond,
+    standard_ref: null,
+    help_text: typeof f.help_text === "string" ? f.help_text : null,
+    nabh: false,
+  };
+}
+
+/** Floor wins on key collision; AI fields normalized + appended after the floor. */
+function mergeFields(floor: QuestionField[], ai: unknown[]): QuestionField[] {
   const floorKeys = new Set(floor.map((f) => f.field_key));
   const extras = ai
-    .filter((f) => !floorKeys.has(f.field_key))
-    .map((f, i) => ({ ...f, nabh: false, sort_order: 1000 + i }));
+    .map((f, i) => normalizeAiField(f, i))
+    .filter((f) => f.field_key && !floorKeys.has(f.field_key));
   return [...floor, ...extras].sort((a, b) => a.sort_order - b.sort_order);
 }
 
