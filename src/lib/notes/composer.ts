@@ -51,6 +51,25 @@ Compose the note now as flowing clinical prose with markdown "### " headings per
   return { markdown, grounding: computeGrounding(markdown, answers, skeleton) };
 }
 
+const TEXT_CONTRACT = `You reformat a doctor's rough clinical note into a clean, well-structured note.
+RULES (priority order):
+1. Use ONLY facts present in the doctor's text. NEVER add, invent or infer any clinical fact, value, name, time, count or finding. Keep "___" placeholders exactly as written.
+2. Insert numbers, drug names, implant/lot details and proper nouns EXACTLY as given.
+3. Organise into clinical sections with markdown "### " headings, in flowing prose — do NOT output a "label: value" list.
+Output ONLY the note markdown — no preamble, no commentary, no JSON.`;
+
+/** v2 (R5): reformat the doctor's free-text editor content into a clean NABH-organised note. */
+export async function composeFromText(noteType: NoteType, text: string): Promise<string> {
+  const prompt = `NOTE TYPE: ${noteType}
+
+DOCTOR'S NOTE (the only source of fact):
+"""${text}"""
+
+Reformat it now into a clean, NABH-organised clinical note in flowing prose under markdown "### " headings, per the rules.`;
+  const raw = await gemini(prompt, { tier: "utility", system: TEXT_CONTRACT });
+  return stripFences(raw).trim();
+}
+
 /** Strip ```markdown … ``` fences a model may wrap output in. */
 function stripFences(s: string): string {
   const t = (s || "").trim();
