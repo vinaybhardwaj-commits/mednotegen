@@ -4,6 +4,7 @@ import { generateSchema } from "@/lib/notes/question-engine";
 import type { NoteType } from "@/lib/notes/types";
 
 export const runtime = "nodejs";
+export const maxDuration = 60;
 
 /** POST /api/sessions/:id/questions — generate (or fetch cached) the question schema. */
 export async function POST(_req: NextRequest, { params }: { params: { id: string } }) {

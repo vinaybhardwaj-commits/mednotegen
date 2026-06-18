@@ -8,7 +8,7 @@ import { humanize } from "@/lib/notes/humanize";
 import type { Answer, NoteType } from "@/lib/notes/types";
 
 export const runtime = "nodejs";
-export const maxDuration = 60;
+export const maxDuration = 120;
 
 /**
  * POST /api/sessions/:id/generate

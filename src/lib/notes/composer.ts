@@ -48,7 +48,9 @@ Compose the note now per the rules. Return ONLY the JSON object.`;
   // Robust parse: strip code fences; retry once on malformed JSON before giving up.
   let parsed: any = null;
   for (let attempt = 0; attempt < 2 && !parsed; attempt++) {
-    const raw = await gemini(prompt, { tier: "reasoning", system: GROUNDING_CONTRACT, json: true });
+    // Compose on the fast (flash) tier: composing from already-structured answers
+    // is templating, not reasoning. Question-generation stays on the reasoning tier.
+    const raw = await gemini(prompt, { tier: "utility", system: GROUNDING_CONTRACT, json: true });
     try { parsed = JSON.parse(stripFences(raw)); }
     catch { if (attempt === 1) throw new Error("composer returned non-JSON twice"); }
   }
