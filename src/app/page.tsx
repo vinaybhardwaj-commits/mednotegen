@@ -208,13 +208,23 @@ export default function Home() {
   // ---- R6: export ----
   function flashToast(msg: string) { setToast(msg); setTimeout(() => setToast(""), 2200); }
 
-  function downloadDocx() {
+  async function downloadDocx() {
     const id = sessionIdRef.current; if (!id) return;
-    const a = document.createElement("a");
-    a.href = `/api/sessions/${id}/export?format=docx&t=${encodeURIComponent(token)}`;
-    a.rel = "noopener";
-    document.body.appendChild(a); a.click(); a.remove();
     setExportOpen(false);
+    const url = `/api/sessions/${id}/export?format=docx`;
+    try {
+      // Fetch as a blob (token via header, not URL) and retry once — the export lambda can
+      // 503 on a cold start, and a raw <a> navigation to that 503 would break the download.
+      let r = await api(url);
+      if (!r.ok) { await new Promise((res) => setTimeout(res, 1300)); r = await api(url); }
+      if (!r.ok) { flashToast("Export failed — try again"); return; }
+      const blob = await r.blob();
+      const href = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = href; a.download = `note-${id}.docx`;
+      document.body.appendChild(a); a.click(); a.remove();
+      setTimeout(() => URL.revokeObjectURL(href), 4000);
+    } catch { flashToast("Export failed — try again"); }
   }
 
   function savePdf() {
