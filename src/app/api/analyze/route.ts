@@ -8,7 +8,10 @@ export const maxDuration = 30;
 // R7 cost-harden: only the trailing window is needed for completions/rewrites; capping the
 // input (and the model's output) is the biggest token lever on long notes.
 const TAIL = 800;
-const MAX_OUTPUT_TOKENS = 320;
+// 2.5-flash bills hidden "thinking" against output tokens — a tiny cap WITH thinking on returns
+// an empty/truncated body. We disable thinking (thinkingBudget 0) for this utility call, so this
+// cap only needs to cover the small JSON payload.
+const MAX_OUTPUT_TOKENS = 512;
 
 // Tiny in-memory LRU (per warm lambda) so identical (note_type, text, gaps) requests — common
 // during a typing burst or when two devices view the same note — don't re-hit the model.
@@ -72,7 +75,7 @@ Return JSON:
 }`;
 
   try {
-    const raw = await gemini(prompt, { tier: "utility", system: SYSTEM, json: true, maxOutputTokens: MAX_OUTPUT_TOKENS });
+    const raw = await gemini(prompt, { tier: "utility", system: SYSTEM, json: true, maxOutputTokens: MAX_OUTPUT_TOKENS, thinkingBudget: 0 });
     const parsed = JSON.parse(stripFences(raw));
     const inline = typeof parsed.inline === "string" ? parsed.inline.slice(0, 160) : "";
     const chips = Array.isArray(parsed.chips)

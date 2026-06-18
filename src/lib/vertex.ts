@@ -39,19 +39,26 @@ export interface ChatOpts {
   temperature?: number;
   json?: boolean;
   maxOutputTokens?: number;
+  /** 2.5 models bill hidden "thinking" against output tokens. Set 0 to disable thinking for
+   *  cheap/fast utility calls (so a small maxOutputTokens isn't starved by the thinking budget). */
+  thinkingBudget?: number;
 }
 
 /** Single-shot generate. Returns the model's text. */
 export async function gemini(prompt: string, opts: ChatOpts = {}): Promise<string> {
   const tier = opts.tier ?? "reasoning";
+  // thinkingConfig isn't in the SDK 1.12 types, but the SDK forwards unknown generationConfig
+  // fields verbatim and the Vertex REST API honours thinkingConfig.thinkingBudget.
+  const generationConfig: Record<string, unknown> = {
+    temperature: opts.temperature ?? (tier === "reasoning" ? 0.2 : 0.4),
+    responseMimeType: opts.json ? "application/json" : "text/plain",
+    ...(opts.maxOutputTokens ? { maxOutputTokens: opts.maxOutputTokens } : {}),
+    ...(opts.thinkingBudget != null ? { thinkingConfig: { thinkingBudget: opts.thinkingBudget } } : {}),
+  };
   const model = client().getGenerativeModel({
     model: modelFor(tier),
     systemInstruction: opts.system,
-    generationConfig: {
-      temperature: opts.temperature ?? (tier === "reasoning" ? 0.2 : 0.4),
-      responseMimeType: opts.json ? "application/json" : "text/plain",
-      ...(opts.maxOutputTokens ? { maxOutputTokens: opts.maxOutputTokens } : {}),
-    },
+    generationConfig: generationConfig as never,
   });
 
   const res = await model.generateContent({
