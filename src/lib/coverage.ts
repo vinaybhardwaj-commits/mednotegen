@@ -79,8 +79,12 @@ function labelTokens(label: string): string[] {
   return (label.toLowerCase().match(/[a-z]{4,}/g) ?? []).filter((t) => !STOP.has(t));
 }
 
-function wordBoundary(kw: string): RegExp {
-  return new RegExp("\\b" + kw.replace(/[.*+?^${}()|[\]\\]/g, "\\$&") + "\\b", "i");
+function matches(kw: string, lower: string): boolean {
+  const esc = kw.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  // Short abbreviations need an exact word match (avoid "ga"→"gastric"); longer keywords
+  // allow a trailing suffix so "count"→"counts", "complication"→"complications", "finding"→"findings".
+  const re = kw.length <= 3 ? new RegExp("\\b" + esc + "\\b", "i") : new RegExp("\\b" + esc, "i");
+  return re.test(lower);
 }
 
 export function computeCoverage(floor: FloorField[], text: string): Coverage {
@@ -91,7 +95,7 @@ export function computeCoverage(floor: FloorField[], text: string): Coverage {
     if (EXCLUDE_SECTIONS.has(f.section)) continue;
     if (f.conditional_on) continue;
     const kws = KW[f.field_key] ?? labelTokens(f.label);
-    const covered = kws.length > 0 && kws.some((kw) => wordBoundary(kw).test(lower));
+    const covered = kws.length > 0 && kws.some((kw) => matches(kw, lower));
     items.push({ field_key: f.field_key, label: f.label, section: f.section, covered });
   }
   const covered = items.filter((i) => i.covered).length;
