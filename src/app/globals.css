@@ -98,3 +98,28 @@ body {
 .ProseMirror p.is-editor-empty:first-child::before {
   content: attr(data-placeholder); color: var(--mng-muted); float: left; height: 0; pointer-events: none;
 }
+
+/* ---- R2: NABH coverage pill + assistant sheet ---- */
+.mng-pill.ok { background: #ecfdf5; color: #047857; }
+
+.mng-scrim {
+  position: fixed; inset: 0; background: rgba(15, 23, 42, .35);
+  display: flex; align-items: flex-end; justify-content: center; z-index: 20;
+}
+.mng-sheet {
+  width: 100%; max-width: 560px; background: var(--mng-surface);
+  border-radius: 16px 16px 0 0; max-height: 72dvh; display: flex; flex-direction: column;
+}
+.mng-sheet-head {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 14px 16px; border-bottom: 1px solid var(--mng-border); font-size: 14px;
+}
+.mng-sheet-x { border: 0; background: transparent; font-size: 20px; color: var(--mng-muted); cursor: pointer; }
+.mng-sheet-body { overflow-y: auto; padding: 8px 12px 20px; }
+.mng-sheet-section { font-size: 11px; text-transform: uppercase; letter-spacing: .04em; color: var(--mng-muted); margin: 12px 8px 2px; }
+.mng-cov-row { display: flex; align-items: center; gap: 10px; padding: 9px 8px; font-size: 14px; border-radius: 8px; }
+.mng-cov-row.need { color: var(--mng-warn); cursor: pointer; }
+.mng-cov-row.has { color: var(--mng-muted); }
+.mng-cov-ico { font-size: 18px; }
+.mng-cov-ico.has { color: #059669; }
+.mng-cov-ico.need { color: var(--mng-warn); }
